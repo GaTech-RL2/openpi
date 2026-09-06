@@ -68,6 +68,22 @@ def main(
     )
     model = openpi.models_pytorch.pi0_pytorch.PI0Pytorch(model_config)
 
+    # HF PaliGemma vocab is 257216 (256000 tokens + 1024 loc + 128 seg + 64 pad).
+    # openpi PI0Pytorch hard-codes 257152 (drops the trailing 64 pad slots).
+    # Trim embedding + lm_head rows so shapes match at load time.
+    model_state = model.state_dict()
+    for vocab_key in (
+        KEY_PREFIX + "model.language_model.embed_tokens.weight",
+        KEY_PREFIX + "lm_head.weight",
+    ):
+        if vocab_key in prefixed_state and vocab_key in model_state:
+            target = model_state[vocab_key].shape[0]
+            src_shape = prefixed_state[vocab_key].shape
+            if src_shape[0] != target:
+                prefixed_state[vocab_key] = prefixed_state[vocab_key][:target].clone()
+                print(f"  Sliced {vocab_key}: {tuple(src_shape)} -> {tuple(prefixed_state[vocab_key].shape)}")
+    del model_state
+
     missing, unexpected = model.load_state_dict(prefixed_state, strict=False)
     print(f"  Loaded  : {len(prefixed_state) - len(unexpected)} PaliGemma tensors")
     print(f"  Random  : {len(missing)} tensors (action expert + projection heads)")
